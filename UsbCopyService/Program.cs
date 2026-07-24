@@ -10,12 +10,16 @@ using UsbCopyService.Settings;
 using WebSystemTools.ApiExceptionHandler.DependencyInjection;
 using WebSystemTools.ApiKeyIdentity.DependencyInjection;
 using WebSystemTools.SerilogLogger;
+using WebSystemTools.SwaggerTools.DependencyInjection;
 using WebSystemTools.TestToolsApi.DependencyInjection;
 using WebSystemTools.WindowsServiceTools;
 
 try
 {
     Console.WriteLine("UsbCopy Service Loading...");
+
+    const string appName = "UsbCopy Service";
+    const int versionCount = 1;
 
     WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
     {
@@ -28,10 +32,17 @@ try
     ILogger? debugLogger = debugMode ? logger : null;
     builder.Host.UseWindowsServiceOnWindows(debugLogger, args);
 
-    builder.Services.AddUsbCopyServices(debugLogger, builder.Configuration);
+    // @formatter:off
+    builder.Services
+        //WebSystemTools
+        .AddSwagger(debugLogger, true, versionCount, appName)
+        .AddUsbCopyServices(debugLogger, builder.Configuration);
+    // @formatter:on
+
 
     // ReSharper disable once using
     await using WebApplication app = builder.Build();
+    app.UseSwaggerServices(debugLogger);
     app.UseApiKeysAuthorization(debugLogger);
     app.UseTestToolsApiEndpoints(debugLogger);
     app.UseUsbCopyApiEndpoints(debugLogger);
