@@ -14,8 +14,7 @@ public static class PackagePlanner
     {
         List<PlannedPackage> result = [];
 
-        List<RemoteFileEntry> ordered =
-            files.OrderBy(o => o.WirePath, StringComparer.OrdinalIgnoreCase).ToList();
+        List<RemoteFileEntry> ordered = [.. files.OrderBy(o => o.WirePath, StringComparer.OrdinalIgnoreCase)];
 
         result.AddRange(PlanArchives(ordered.Where(f => f.FileLength <= smallFileMaxSize), archiveVolumeMaxSize));
 

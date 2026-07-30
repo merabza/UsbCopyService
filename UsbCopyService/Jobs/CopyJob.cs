@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -26,12 +27,10 @@ public sealed class CopyJob : IDisposable
     private const int CopyBufferSize = 81920;
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
-    private readonly string _connectionId;
     private readonly ExcludeSet? _excludeSet;
     private readonly HashSet<string> _existingFiles;
     private readonly FileStorageData _fileStorageData;
     private readonly IHubContext<UsbCopyHub> _hubContext;
-    private readonly string _jobId;
     private readonly ILogger _logger;
     private readonly string _outDir;
     private readonly string _projectName;
@@ -48,21 +47,26 @@ public sealed class CopyJob : IDisposable
         _logger = logger;
         _hubContext = hubContext;
         _settings = settings;
-        _connectionId = connectionId;
+        ConnectionId = connectionId;
         _projectName = projectName;
         _fileStorageData = fileStorageData;
         _excludeSet = excludeSet;
         _existingFiles = new HashSet<string>(existingFiles, StringComparer.OrdinalIgnoreCase);
 
-        _jobId = Guid.NewGuid().ToString("N");
-        _workDir = Path.Combine(settings.WorkPath ?? string.Empty, "job_" + _jobId);
+        JobId = Guid.NewGuid().ToString("N");
+        _workDir = Path.Combine(settings.WorkPath ?? string.Empty, "job_" + JobId);
         _srcDir = Path.Combine(_workDir, "src");
         _outDir = Path.Combine(_workDir, "out");
     }
 
-    public string JobId => _jobId;
+    public string JobId { get; }
 
-    public string ConnectionId => _connectionId;
+    public string ConnectionId { get; }
+
+    public void Dispose()
+    {
+        _cancellationTokenSource.Dispose();
+    }
 
     //სამუშაოს ფონურად გაშვება; დასრულებისას onFinished ეძახება რეესტრიდან ამოსაშლელად
     public void Start(Action<CopyJob> onFinished)
@@ -83,11 +87,6 @@ public sealed class CopyJob : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        _cancellationTokenSource.Dispose();
-    }
-
     public void Cancel()
     {
         try
@@ -106,7 +105,7 @@ public sealed class CopyJob : IDisposable
         PackageCurrent? current = _current;
         if (current is null || !string.Equals(current.Source.PackageId, packageId, StringComparison.Ordinal))
         {
-            _logger.LogWarning("Ack for unknown package {PackageId} in job {JobId} ignored", packageId, _jobId);
+            _logger.LogWarning("Ack for unknown package {PackageId} in job {JobId} ignored", packageId, JobId);
             return;
         }
 
@@ -131,7 +130,7 @@ public sealed class CopyJob : IDisposable
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            await SendProgress($"Job {_jobId} for project {_projectName} started", cancellationToken);
+            await SendProgress($"Job {JobId} for project {_projectName} started", cancellationToken);
 
             (FileManager fileManager, WalkResult walkResult) = await CollectFiles(cancellationToken);
 
@@ -163,23 +162,23 @@ public sealed class CopyJob : IDisposable
 
             double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
             summary.ElapsedSeconds = elapsedSeconds;
-            await _hubContext.Clients.Client(_connectionId).SendAsync(UsbCopyHubEvents.ReceiveJobCompleted,
+            await _hubContext.Clients.Client(ConnectionId).SendAsync(UsbCopyHubEvents.ReceiveJobCompleted,
                 JsonSerializer.Serialize(summary), cancellationToken);
-            _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", _jobId, elapsedSeconds);
+            _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", JobId, elapsedSeconds);
         }
         catch (OperationCanceledException e)
         {
-            _logger.LogInformation(e, "Job {JobId} was canceled", _jobId);
+            _logger.LogInformation(e, "Job {JobId} was canceled", JobId);
             await TrySendFailed("Job was canceled");
         }
         catch (UsbCopyJobException e)
         {
-            _logger.LogError(e, "Job {JobId} failed", _jobId);
+            _logger.LogError(e, "Job {JobId} failed", JobId);
             await TrySendFailed(e.Message);
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "Job {JobId} failed unexpectedly", _jobId);
+            _logger.LogError(e, "Job {JobId} failed unexpectedly", JobId);
             await TrySendFailed(e.Message);
         }
         finally
@@ -194,15 +193,17 @@ public sealed class CopyJob : IDisposable
         Directory.CreateDirectory(_srcDir);
         Directory.CreateDirectory(_outDir);
 
-        FileManager fileManager =
-            FileManagersFactoryExt.CreateFileManager(false, _logger, _srcDir, _fileStorageData) ??
-            throw new UsbCopyJobException("fileManager does not created");
+        FileManager fileManager = FileManagersFactoryExt.CreateFileManager(false, _logger, _srcDir, _fileStorageData) ??
+                                  throw new UsbCopyJobException("fileManager does not created");
 
         string[] excludes = [];
         if (_excludeSet?.FolderFileMasks is { Count: > 0 })
         {
-            excludes = _excludeSet.FolderFileMasks
-                .Select(s => s.Replace(Path.DirectorySeparatorChar, fileManager.DirectorySeparatorChar)).ToArray();
+            excludes =
+            [
+                .. _excludeSet.FolderFileMasks.Select(s =>
+                    s.Replace(Path.DirectorySeparatorChar, fileManager.DirectorySeparatorChar))
+            ];
         }
 
         var walker = new RemoteTreeWalker(fileManager, excludes, _existingFiles,
@@ -248,7 +249,7 @@ public sealed class CopyJob : IDisposable
 
             //DiskFileManager afterRootPath-ს არ ითვალისწინებს, ამიტომ მას სრული ფარდობითი გზა გადაეცემა
             bool downloaded = isDiskSource
-                ? fileManager.DownloadFile(GetNativeRelativePath(fileManager, entry), DownloadTempExtension, null)
+                ? fileManager.DownloadFile(GetNativeRelativePath(fileManager, entry), DownloadTempExtension)
                 : fileManager.DownloadFile(entry.FileName, DownloadTempExtension, entry.AfterRootPath);
 
             if (!downloaded)
@@ -285,7 +286,7 @@ public sealed class CopyJob : IDisposable
             var ackTcs = new TaskCompletionSource<AckResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _current = new PackageCurrent(source, ackTcs);
 
-            await _hubContext.Clients.Client(_connectionId).SendAsync(UsbCopyHubEvents.ReceivePackageReady,
+            await _hubContext.Clients.Client(ConnectionId).SendAsync(UsbCopyHubEvents.ReceivePackageReady,
                 JsonSerializer.Serialize(manifest), cancellationToken);
 
             AckResult ackResult = await WaitAck(ackTcs, cancellationToken);
@@ -379,21 +380,28 @@ public sealed class CopyJob : IDisposable
     private async Task CreateZip(IReadOnlyCollection<RemoteFileEntry> files, string zipPath,
         CancellationToken cancellationToken)
     {
-        var zipFileStream = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, CopyBufferSize,
-            true);
+        // ReSharper disable once DisposableConstructor
+        // ReSharper disable once using
+        await using var zipFileStream = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None,
+            CopyBufferSize, true);
         await using (zipFileStream.ConfigureAwait(false))
         {
-            using var zipArchive = new ZipArchive(zipFileStream, ZipArchiveMode.Create);
+            // ReSharper disable once using
+            // ReSharper disable once DisposableConstructor
+            await using var zipArchive = new ZipArchive(zipFileStream, ZipArchiveMode.Create);
             foreach (RemoteFileEntry entry in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 ZipArchiveEntry zipEntry = zipArchive.CreateEntry(entry.WirePath, CompressionLevel.Optimal);
-                Stream zipEntryStream = await zipEntry.OpenAsync(cancellationToken);
+                // ReSharper disable once using
+                await using Stream zipEntryStream = await zipEntry.OpenAsync(cancellationToken);
                 await using (zipEntryStream.ConfigureAwait(false))
                 {
-                    var sourceStream = new FileStream(GetLocalFullPath(entry), FileMode.Open, FileAccess.Read,
-                        FileShare.Read, CopyBufferSize, true);
+                    // ReSharper disable once using
+                    // ReSharper disable once DisposableConstructor
+                    await using var sourceStream = new FileStream(GetLocalFullPath(entry), FileMode.Open,
+                        FileAccess.Read, FileShare.Read, CopyBufferSize, true);
                     await using (sourceStream.ConfigureAwait(false))
                     {
                         await sourceStream.CopyToAsync(zipEntryStream, cancellationToken);
@@ -406,29 +414,33 @@ public sealed class CopyJob : IDisposable
     private static async Task<string> ComputeHash(string filePath, long offset, long length,
         CancellationToken cancellationToken)
     {
-        var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, CopyBufferSize,
-            true);
+        // ReSharper disable once using
+        // ReSharper disable once DisposableConstructor
+        await using var fileStream =
+            new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, CopyBufferSize, true);
         await using (fileStream.ConfigureAwait(false))
         {
             fileStream.Seek(offset, SeekOrigin.Begin);
 
-            using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[CopyBufferSize];
-            long remaining = length;
-            while (remaining > 0)
+            using (var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
-                var toRead = (int)Math.Min(buffer.Length, remaining);
-                int read = await fileStream.ReadAsync(buffer.AsMemory(0, toRead), cancellationToken);
-                if (read <= 0)
+                var buffer = new byte[CopyBufferSize];
+                long remaining = length;
+                while (remaining > 0)
                 {
-                    throw new UsbCopyJobException($"Unexpected end of file {filePath}");
+                    var toRead = (int)Math.Min(buffer.Length, remaining);
+                    int read = await fileStream.ReadAsync(buffer.AsMemory(0, toRead), cancellationToken);
+                    if (read <= 0)
+                    {
+                        throw new UsbCopyJobException($"Unexpected end of file {filePath}");
+                    }
+
+                    incrementalHash.AppendData(buffer, 0, read);
+                    remaining -= read;
                 }
 
-                incrementalHash.AppendData(buffer, 0, read);
-                remaining -= read;
+                return Convert.ToHexString(incrementalHash.GetHashAndReset());
             }
-
-            return Convert.ToHexString(incrementalHash.GetHashAndReset());
         }
     }
 
@@ -458,18 +470,18 @@ public sealed class CopyJob : IDisposable
 
                     break;
                 default:
-                    break;
+                    throw new SwitchExpressionException();
             }
         }
         catch (IOException e)
         {
-            _logger.LogWarning(e, "Cannot cleanup delivered package files for job {JobId}", _jobId);
+            _logger.LogWarning(e, "Cannot cleanup delivered package files for job {JobId}", JobId);
         }
     }
 
     private Task SendProgress(string message, CancellationToken cancellationToken)
     {
-        return _hubContext.Clients.Client(_connectionId)
+        return _hubContext.Clients.Client(ConnectionId)
             .SendAsync(UsbCopyHubEvents.ReceiveProgress, message, cancellationToken);
     }
 
@@ -477,12 +489,12 @@ public sealed class CopyJob : IDisposable
     {
         try
         {
-            await _hubContext.Clients.Client(_connectionId)
+            await _hubContext.Clients.Client(ConnectionId)
                 .SendAsync(UsbCopyHubEvents.ReceiveJobFailed, errorMessage, CancellationToken.None);
         }
         catch (Exception e)
         {
-            _logger.LogWarning(e, "Cannot send job failure message for job {JobId}", _jobId);
+            _logger.LogWarning(e, "Cannot send job failure message for job {JobId}", JobId);
         }
     }
 

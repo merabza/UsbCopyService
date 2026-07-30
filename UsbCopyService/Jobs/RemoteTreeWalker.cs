@@ -62,8 +62,11 @@ public sealed class RemoteTreeWalker
             await ProcessFolder(files, folderAfterRootFullName, onSkippedExisting, cancellationToken);
         }
 
-        List<MyFileInfo> folderFiles = _fileManager.GetFilesWithInfo(afterRootPath, null)
-            .Where(file => !NeedExclude(_fileManager.PathCombine(afterRootPath, file.FileName))).ToList();
+        List<MyFileInfo> folderFiles =
+        [
+            .. _fileManager.GetFilesWithInfo(afterRootPath, null).Where(file =>
+                !NeedExclude(_fileManager.PathCombine(afterRootPath, file.FileName)))
+        ];
 
         foreach (MyFileInfo fileInfo in SelectFiles(folderFiles))
         {
@@ -82,11 +85,13 @@ public sealed class RemoteTreeWalker
     private static List<MyFileInfo> SelectFiles(List<MyFileInfo> folderFiles)
     {
         List<MyFileInfo> result = [];
-        Dictionary<string, List<(MyFileInfo FileInfo, DateTime FileDateTime)>> fileByPatterns = new(StringComparer.Ordinal);
+        Dictionary<string, List<(MyFileInfo FileInfo, DateTime FileDateTime)>> fileByPatterns =
+            new(StringComparer.Ordinal);
 
         foreach (MyFileInfo fileInfo in folderFiles)
         {
-            (DateTime dateTimeByDigits, string? pattern) = fileInfo.FileName.GetDateTimeAndPatternByDigits(TimestampMask);
+            (DateTime dateTimeByDigits, string? pattern) =
+                fileInfo.FileName.GetDateTimeAndPatternByDigits(TimestampMask);
 
             if (pattern is null)
             {
@@ -103,8 +108,8 @@ public sealed class RemoteTreeWalker
             value.Add((fileInfo, dateTimeByDigits));
         }
 
-        foreach (KeyValuePair<string, List<(MyFileInfo FileInfo, DateTime FileDateTime)>> kvp in
-                 fileByPatterns.OrderBy(k => k.Key, StringComparer.Ordinal))
+        foreach (KeyValuePair<string, List<(MyFileInfo FileInfo, DateTime FileDateTime)>> kvp in fileByPatterns.OrderBy(
+                     k => k.Key, StringComparer.Ordinal))
         {
             result.Add(kvp.Value.OrderByDescending(o => o.FileDateTime).First().FileInfo);
         }
