@@ -422,25 +422,24 @@ public sealed class CopyJob : IDisposable
         {
             fileStream.Seek(offset, SeekOrigin.Begin);
 
-            using (var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+            // ReSharper disable once using
+            using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[CopyBufferSize];
+            long remaining = length;
+            while (remaining > 0)
             {
-                var buffer = new byte[CopyBufferSize];
-                long remaining = length;
-                while (remaining > 0)
+                var toRead = (int)Math.Min(buffer.Length, remaining);
+                int read = await fileStream.ReadAsync(buffer.AsMemory(0, toRead), cancellationToken);
+                if (read <= 0)
                 {
-                    var toRead = (int)Math.Min(buffer.Length, remaining);
-                    int read = await fileStream.ReadAsync(buffer.AsMemory(0, toRead), cancellationToken);
-                    if (read <= 0)
-                    {
-                        throw new UsbCopyJobException($"Unexpected end of file {filePath}");
-                    }
-
-                    incrementalHash.AppendData(buffer, 0, read);
-                    remaining -= read;
+                    throw new UsbCopyJobException($"Unexpected end of file {filePath}");
                 }
 
-                return Convert.ToHexString(incrementalHash.GetHashAndReset());
+                incrementalHash.AppendData(buffer, 0, read);
+                remaining -= read;
             }
+
+            return Convert.ToHexString(incrementalHash.GetHashAndReset());
         }
     }
 
