@@ -4,7 +4,8 @@ using UsbCopyService.Settings;
 
 namespace UsbCopyService.Jobs;
 
-//სერვისის გაშვებისას სამუშაო საქაღალდეში დარჩენილი ძველი job_* ქვესაქაღალდეების გასუფთავება
+//სერვისის გაშვებისას სამუშაო საქაღალდეში დარჩენილი job_* ქვესაქაღალდეების გასუფთავება;
+//ვალიდური და ვადაგაუსვლელი state.json-ის მქონე საქაღალდეები რჩება — მათი აღდგენა ResumeJob-ით არის შესაძლებელი
 public static class WorkPathPreparer
 {
     public static void Prepare(UsbCopySettings settings, Serilog.ILogger logger)
@@ -34,6 +35,15 @@ public static class WorkPathPreparer
 
         foreach (string jobDir in Directory.GetDirectories(fullWorkPath, "job_*"))
         {
+            JobState? state = JobStateStore.TryLoad(jobDir);
+            if (state is not null && DateTime.UtcNow - state.UpdatedAtUtc <= settings.DetachedJobTtl)
+            {
+                logger.Information(
+                    "Keeping resumable job work directory {JobDir} (phase {Phase}, package {NextPackageIndex}/{PackagesTotal})",
+                    jobDir, state.Phase, state.NextPackageIndex, state.PackagesTotal);
+                continue;
+            }
+
             try
             {
                 Directory.Delete(jobDir, true);

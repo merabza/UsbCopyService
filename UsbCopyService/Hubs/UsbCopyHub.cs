@@ -1,8 +1,10 @@
 using System;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using UsbCopyService.Jobs;
+using UsbCopyServiceShared.Contracts;
 
 namespace UsbCopyService.Hubs;
 
@@ -35,6 +37,16 @@ public sealed class UsbCopyHub : Hub
         return Task.FromResult(jobId);
     }
 
+    //სამუშაოს ხელახლა მიბმა კავშირის წყვეტის ან სერვისის გადატვირთვის შემდეგ; პასუხი ResumeJobResult-ის JSON-ია
+    public Task<string> ResumeJob(string jobId)
+    {
+        string connectionId = Context.ConnectionId;
+        _logger.LogInformation("ResumeJob {JobId} requested by connection {ConnectionId}", jobId, connectionId);
+
+        ResumeJobResult result = _jobManager.ResumeJob(connectionId, jobId);
+        return Task.FromResult(JsonSerializer.Serialize(result));
+    }
+
     public Task AckPackage(string jobId, string packageId, bool ok, string? errorMessage)
     {
         _jobManager.AckPackage(Context.ConnectionId, jobId, packageId, ok, errorMessage);
@@ -43,7 +55,7 @@ public sealed class UsbCopyHub : Hub
 
     public override Task OnDisconnectedAsync(Exception? exception)
     {
-        _jobManager.CancelForConnection(Context.ConnectionId);
+        _jobManager.DetachForConnection(Context.ConnectionId);
         return base.OnDisconnectedAsync(exception);
     }
 }

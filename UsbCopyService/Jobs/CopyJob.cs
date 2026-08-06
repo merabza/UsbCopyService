@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
@@ -20,58 +19,102 @@ using UsbCopyServiceShared.Contracts;
 
 namespace UsbCopyService.Jobs;
 
-//ერთი კლიენტის მოთხოვნით გაშვებული სამუშაო: წყაროდან ფაილების ჩამოტვირთვა, ოპტიმიზაცია და კლიენტისთვის მიწოდება
+//ერთი კლიენტის მოთხოვნით გაშვებული სამუშაო: წყაროდან ფაილების ჩამოტვირთვა, ოპტიმიზაცია და კლიენტისთვის მიწოდება.
+//მდგომარეობა ინახება დისკზე (state.json), ამიტომ სამუშაო კავშირის წყვეტასაც და სერვისის გადატვირთვასაც უძლებს
 public sealed class CopyJob : IDisposable
 {
-    private const string DownloadTempExtension = "dwn";
+    internal const string DownloadTempExtension = "dwn";
     private const int CopyBufferSize = 81920;
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
+    private readonly object _connectionLock = new();
     private readonly ExcludeSet? _excludeSet;
-    private readonly HashSet<string> _existingFiles;
-    private readonly FileStorageData _fileStorageData;
+    private readonly FileStorageData? _fileStorageData;
     private readonly IHubContext<UsbCopyHub> _hubContext;
     private readonly ILogger _logger;
     private readonly string _outDir;
-    private readonly string _projectName;
     private readonly UsbCopySettings _settings;
     private readonly string _srcDir;
+    private readonly JobState _state;
     private readonly string _workDir;
 
-    private volatile PackageCurrent? _current;
+    private TaskCompletionSource _attachedTcs;
 
-    // ReSharper disable once ConvertToPrimaryConstructor
+    private string? _connectionId;
+
+    private volatile PackageCurrent? _current;
+    private TaskCompletionSource _detachedTcs;
+
+    private volatile bool _isFinished;
+
+    //ახალი სამუშაოს კონსტრუქტორი
     public CopyJob(ILogger logger, IHubContext<UsbCopyHub> hubContext, UsbCopySettings settings, string connectionId,
-        string projectName, FileStorageData fileStorageData, ExcludeSet? excludeSet, string[] existingFiles)
+        string projectName, FileStorageData fileStorageData, ExcludeSet? excludeSet, string[] existingFiles) : this(
+        logger, hubContext, settings, connectionId, new JobState
+        {
+            JobId = Guid.NewGuid().ToString("N"),
+            ProjectName = projectName,
+            ExistingFiles = existingFiles,
+            Phase = EJobPhase.Staging,
+            CreatedAtUtc = DateTime.UtcNow
+        }, fileStorageData, excludeSet)
+    {
+    }
+
+    //აღდგენილი სამუშაოს კონსტრუქტორი: მდგომარეობა დისკიდან იკითხება; Transferring ფაზას წყაროს კონფიგურაცია აღარ სჭირდება
+    public CopyJob(ILogger logger, IHubContext<UsbCopyHub> hubContext, UsbCopySettings settings, string connectionId,
+        JobState state, FileStorageData? fileStorageData, ExcludeSet? excludeSet)
     {
         _logger = logger;
         _hubContext = hubContext;
         _settings = settings;
-        ConnectionId = connectionId;
-        _projectName = projectName;
+        _connectionId = connectionId;
         _fileStorageData = fileStorageData;
         _excludeSet = excludeSet;
-        _existingFiles = new HashSet<string>(existingFiles, StringComparer.OrdinalIgnoreCase);
+        _state = state;
 
-        JobId = Guid.NewGuid().ToString("N");
-        _workDir = Path.Combine(settings.WorkPath ?? string.Empty, "job_" + JobId);
+        _attachedTcs = NewTcs();
+        _attachedTcs.TrySetResult();
+        _detachedTcs = NewTcs();
+
+        _workDir = Path.Combine(settings.WorkPath ?? string.Empty, "job_" + state.JobId);
         _srcDir = Path.Combine(_workDir, "src");
         _outDir = Path.Combine(_workDir, "out");
     }
 
-    public string JobId { get; }
+    public string JobId => _state.JobId;
 
-    public string ConnectionId { get; }
+    //კავშირი, რომელზეც სამუშაოა მიბმული; null ნიშნავს, რომ კლიენტი გათიშულია (detached)
+    public string? CurrentConnectionId
+    {
+        get
+        {
+            lock (_connectionLock)
+            {
+                return _connectionId;
+            }
+        }
+    }
+
+    //სამუშაო დასრულებულია და მისი ხელახლა მიბმა აღარ შეიძლება
+    public bool IsFinished => _isFinished;
 
     public void Dispose()
     {
         _cancellationTokenSource.Dispose();
     }
 
-    //სამუშაოს ფონურად გაშვება; დასრულებისას onFinished ეძახება რეესტრიდან ამოსაშლელად
+    private static TaskCompletionSource NewTcs()
+    {
+        return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    //სამუშაოს ფონურად გაშვება; დასრულებისას onFinished ეძახება რეესტრიდან ამოსაშლელად.
+    //Task.Run აუცილებელია: async მეთოდი პირველ await-მდე გამომძახებლის ნაკადზე ირბენს და Task.Run-ის გარეშე
+    //სინქრონული staging სამუშაოები ჰაბის მეთოდს (და JobManager-ის ლოკს) დააკავებდა — StartJob-ის პასუხი კლიენტს ვერ მიუვიდოდა
     public void Start(Action<CopyJob> onFinished)
     {
-        _ = RunAndCleanup(onFinished);
+        _ = Task.Run(() => RunAndCleanup(onFinished));
     }
 
     private async Task RunAndCleanup(Action<CopyJob> onFinished)
@@ -82,20 +125,74 @@ public sealed class CopyJob : IDisposable
         }
         finally
         {
+            _isFinished = true;
             onFinished(this);
             Dispose();
         }
     }
 
-    public void Cancel()
+    //კავშირის მოხსნა: სამუშაო არ უქმდება — ჩერდება და TTL-ის ვადაში ხელახლა მიბმას ელოდება
+    public void Detach()
     {
-        try
+        lock (_connectionLock)
         {
-            _cancellationTokenSource.Cancel();
+            if (_isFinished)
+            {
+                return;
+            }
+
+            _connectionId = null;
+
+            try
+            {
+                _cancellationTokenSource.CancelAfter(_settings.DetachedJobTtl);
+            }
+            catch (ObjectDisposedException)
+            {
+                //სამუშაო უკვე დასრულებულია
+                return;
+            }
+
+            _detachedTcs.TrySetResult();
+            _attachedTcs = NewTcs();
         }
-        catch (ObjectDisposedException)
+    }
+
+    //სამუშაოს მიბმა ახალ კავშირზე; false ბრუნდება, თუ სამუშაო ჯერ კიდევ სხვა კავშირს უჭირავს ან დასრულებულია
+    public bool TryAttach(string connectionId)
+    {
+        lock (_connectionLock)
         {
-            //სამუშაო უკვე დასრულებულია
+            if (_isFinished || _cancellationTokenSource.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            if (string.Equals(_connectionId, connectionId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (_connectionId is not null)
+            {
+                return false;
+            }
+
+            _connectionId = connectionId;
+
+            try
+            {
+                //TTL-ის გამორთვა — კლიენტი ისევ ჩვენთანაა
+                _cancellationTokenSource.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+
+            _attachedTcs.TrySetResult();
+            _detachedTcs = NewTcs();
+            return true;
         }
     }
 
@@ -127,52 +224,44 @@ public sealed class CopyJob : IDisposable
     private async Task RunAsync()
     {
         CancellationToken cancellationToken = _cancellationTokenSource.Token;
-        var stopwatch = Stopwatch.StartNew();
         try
         {
-            await SendProgress($"Job {JobId} for project {_projectName} started", cancellationToken);
+            await SendProgress($"Job {JobId} for project {_state.ProjectName} started", cancellationToken);
 
-            (FileManager fileManager, WalkResult walkResult) = await CollectFiles(cancellationToken);
+            List<PlannedPackage> plan = _state.Phase == EJobPhase.Staging
+                ? await PrepareStagingAndPlan(cancellationToken)
+                : RestorePlanFromState();
+
+            await ServePackages(plan, cancellationToken);
 
             var summary = new JobSummary
             {
-                FilesTotal = walkResult.Files.Count,
-                FilesSkipped = walkResult.SkippedExisting,
-                BytesOriginal = walkResult.Files.Sum(f => f.FileLength)
+                FilesTotal = _state.FilesTotal,
+                FilesSkipped = _state.FilesSkipped,
+                BytesOriginal = _state.BytesOriginal,
+                BytesTransferred = _state.BytesTransferred,
+                PackagesTotal = _state.PackagesTotal,
+                ElapsedSeconds = (DateTime.UtcNow - _state.CreatedAtUtc).TotalSeconds
             };
 
-            await SendProgress(
-                $"Selected {summary.FilesTotal} files ({summary.BytesOriginal} bytes), skipped {summary.FilesSkipped} existing",
-                cancellationToken);
-
-            if (walkResult.Files.Count > 0)
-            {
-                CheckFreeSpace(walkResult.Files);
-
-                await DownloadAll(fileManager, walkResult.Files, cancellationToken);
-
-                List<PlannedPackage> plan = PackagePlanner.Plan(walkResult.Files, _settings.SmallFileMaxSizeBytes,
-                    _settings.ArchiveVolumeMaxSizeBytes, _settings.PartMaxSizeBytes);
-
-                summary.PackagesTotal = plan.Count;
-                await SendProgress($"Prepared {plan.Count} packages", cancellationToken);
-
-                summary.BytesTransferred = await ServePackages(plan, cancellationToken);
-            }
-
-            double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
-            summary.ElapsedSeconds = elapsedSeconds;
-            await _hubContext.Clients.Client(ConnectionId).SendAsync(UsbCopyHubEvents.ReceiveJobCompleted,
-                JsonSerializer.Serialize(summary), cancellationToken);
-            _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", JobId, elapsedSeconds);
+            //ჯერ მდგომარეობა და სამუშაო საქაღალდე იშლება, მერე იგზავნება დასრულების შეტყობინება:
+            //თუ შუაში მოვკვდით, კლიენტი ResumeJob-ზე NotFound-ს მიიღებს და ახალი (ცარიელი) სამუშაოთი დაასრულებს
+            CleanupWorkDir();
+            await SafeSendToClient(CurrentConnectionId, UsbCopyHubEvents.ReceiveJobCompleted,
+                JsonSerializer.Serialize(summary), CancellationToken.None);
+            _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", JobId, summary.ElapsedSeconds);
         }
         catch (OperationCanceledException e)
         {
-            _logger.LogInformation(e, "Job {JobId} was canceled", JobId);
-            await TrySendFailed("Job was canceled");
+            //ერთადერთი გაუქმების წყარო detached TTL-ის ამოწურვაა — მიტოვებული სამუშაო იშლება
+            _logger.LogInformation(e, "Job {JobId} abandoned: client did not reconnect within {TtlMinutes} minutes",
+                JobId, _settings.DetachedJobTtlMinutes);
+            CleanupWorkDir();
+            await TrySendFailed("Job was abandoned: client did not reconnect in time");
         }
         catch (UsbCopyJobException e)
         {
+            //მდგომარეობა და staging რჩება — კლიენტს ResumeJob-ით გაგრძელება შეეძლება
             _logger.LogError(e, "Job {JobId} failed", JobId);
             await TrySendFailed(e.Message);
         }
@@ -181,17 +270,130 @@ public sealed class CopyJob : IDisposable
             _logger.LogError(e, "Job {JobId} failed unexpectedly", JobId);
             await TrySendFailed(e.Message);
         }
-        finally
+    }
+
+    //Staging ფაზა: წყაროს დათვალიერება, ფაილების ჩამოტვირთვა (უკვე ჩამოტვირთულების გამოტოვებით) და გეგმის აგება
+    private async Task<List<PlannedPackage>> PrepareStagingAndPlan(CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(_srcDir);
+        Directory.CreateDirectory(_outDir);
+        JobStateStore.Save(_workDir, _state);
+
+        (FileManager fileManager, WalkResult walkResult) = await CollectFiles(cancellationToken);
+
+        _state.FilesTotal = walkResult.Files.Count;
+        _state.FilesSkipped = walkResult.SkippedExisting;
+        _state.BytesOriginal = walkResult.Files.Sum(f => f.FileLength);
+
+        await SendProgress(
+            $"Selected {_state.FilesTotal} files ({_state.BytesOriginal} bytes), skipped {_state.FilesSkipped} existing",
+            cancellationToken);
+
+        List<PlannedPackage> plan = [];
+        if (walkResult.Files.Count > 0)
         {
-            CleanupWorkDir();
+            //აღდგენისას უკვე ჩამოტვირთული (ზომით დამთხვეული) ფაილები ხელახლა აღარ მოგვაქვს
+            List<RemoteFileEntry> filesToDownload = [.. walkResult.Files.Where(f => !IsAlreadyStaged(f))];
+
+            CheckFreeSpace(filesToDownload);
+
+            await DownloadAll(fileManager, filesToDownload, cancellationToken);
+
+            plan = PackagePlanner.Plan(walkResult.Files, _settings.SmallFileMaxSizeBytes,
+                _settings.ArchiveVolumeMaxSizeBytes, _settings.PartMaxSizeBytes);
         }
+
+        _state.Plan = [.. plan.Select(PlannedPackageState.From)];
+        _state.Phase = EJobPhase.Transferring;
+        _state.PackagesTotal = plan.Count;
+        _state.NextPackageIndex = 0;
+        JobStateStore.Save(_workDir, _state);
+
+        await SendProgress($"Prepared {plan.Count} packages", cancellationToken);
+        return plan;
+    }
+
+    //Transferring ფაზის აღდგენა: გეგმა დისკიდან იკითხება და მოწმდება, რომ დარჩენილი პაკეტების staged ფაილები ადგილზეა
+    private List<PlannedPackage> RestorePlanFromState()
+    {
+        List<PlannedPackage> plan = [.. (_state.Plan ?? []).Select(s => s.ToPlannedPackage())];
+
+        for (int packageIndex = _state.NextPackageIndex; packageIndex < plan.Count; packageIndex++)
+        {
+            foreach (RemoteFileEntry entry in plan[packageIndex].Files)
+            {
+                string localFullPath = GetLocalFullPath(entry);
+                if (File.Exists(localFullPath) && new FileInfo(localFullPath).Length == entry.FileLength)
+                {
+                    continue;
+                }
+
+                //staged მონაცემები დაკარგულია — სამუშაო აღდგენადი აღარ არის, კლიენტმა ახალი უნდა დაიწყოს
+                CleanupWorkDir();
+                throw new UsbCopyJobException($"Staged data lost for {entry.WirePath}, a new job must be started");
+            }
+        }
+
+        CleanupCompletedPackages(plan);
+
+        _logger.LogInformation("Job {JobId} restored from disk at package {NextPackageIndex}/{PackagesTotal}", JobId,
+            _state.NextPackageIndex, _state.PackagesTotal);
+        return plan;
+    }
+
+    //წყვეტის გამო შესაძლოა დადასტურებული პაკეტების staged ფაილები ვერ წაიშალა — საუკეთესო ძალისხმევით ვასუფთავებთ
+    private void CleanupCompletedPackages(List<PlannedPackage> plan)
+    {
+        for (var packageIndex = 0; packageIndex < _state.NextPackageIndex && packageIndex < plan.Count; packageIndex++)
+        {
+            PlannedPackage plannedPackage = plan[packageIndex];
+            try
+            {
+                switch (plannedPackage.PackageType)
+                {
+                    case EPackageType.Archive:
+                        File.Delete(GetZipPath(packageIndex));
+                        foreach (RemoteFileEntry entry in plannedPackage.Files)
+                        {
+                            File.Delete(GetLocalFullPath(entry));
+                        }
+
+                        break;
+                    case EPackageType.WholeFile:
+                        File.Delete(GetLocalFullPath(plannedPackage.Files[0]));
+                        break;
+                    case EPackageType.FilePart:
+                        //დიდი ფაილი მხოლოდ მაშინ იშლება, როცა მისი ბოლო ნაწილიც დადასტურებულია
+                        if (plannedPackage.PartIndex == plannedPackage.PartsTotal - 1)
+                        {
+                            File.Delete(GetLocalFullPath(plannedPackage.Files[0]));
+                        }
+
+                        break;
+                    default:
+                        throw new SwitchExpressionException();
+                }
+            }
+            catch (IOException e)
+            {
+                _logger.LogWarning(e, "Cannot cleanup delivered package files for job {JobId}", JobId);
+            }
+        }
+    }
+
+    private bool IsAlreadyStaged(RemoteFileEntry entry)
+    {
+        string localFullPath = GetLocalFullPath(entry);
+        return File.Exists(localFullPath) && new FileInfo(localFullPath).Length == entry.FileLength;
     }
 
     private async Task<(FileManager FileManager, WalkResult WalkResult)> CollectFiles(
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(_srcDir);
-        Directory.CreateDirectory(_outDir);
+        if (_fileStorageData is null)
+        {
+            throw new UsbCopyJobException($"File storage for project {_state.ProjectName} is not configured");
+        }
 
         FileManager fileManager = FileManagersFactoryExt.CreateFileManager(false, _logger, _srcDir, _fileStorageData) ??
                                   throw new UsbCopyJobException("fileManager does not created");
@@ -206,7 +408,8 @@ public sealed class CopyJob : IDisposable
             ];
         }
 
-        var walker = new RemoteTreeWalker(fileManager, excludes, _existingFiles,
+        var existingFiles = new HashSet<string>(_state.ExistingFiles, StringComparer.OrdinalIgnoreCase);
+        var walker = new RemoteTreeWalker(fileManager, excludes, existingFiles,
             message => SendProgress(message, cancellationToken));
         WalkResult walkResult = await walker.CollectAsync(cancellationToken);
         return (fileManager, walkResult);
@@ -247,6 +450,9 @@ public sealed class CopyJob : IDisposable
 
             await SendProgress($"Downloading {entry.WirePath}", cancellationToken);
 
+            //წყვეტისას დარჩენილი შუალედური (.dwn) ფაილი ხელახლა ჩამოტვირთვას "already exists" შეცდომით ჩააგდებდა
+            DeleteStaleDownloadTemp(entry, isDiskSource);
+
             //DiskFileManager afterRootPath-ს არ ითვალისწინებს, ამიტომ მას სრული ფარდობითი გზა გადაეცემა
             bool downloaded = isDiskSource
                 ? fileManager.DownloadFile(GetNativeRelativePath(fileManager, entry), DownloadTempExtension)
@@ -256,6 +462,26 @@ public sealed class CopyJob : IDisposable
             {
                 throw new UsbCopyJobException($"Cannot download file {entry.WirePath}");
             }
+        }
+    }
+
+    private void DeleteStaleDownloadTemp(RemoteFileEntry entry, bool isDiskSource)
+    {
+        try
+        {
+            File.Delete(GetLocalFullPath(entry) + "." + DownloadTempExtension);
+
+            //DiskFileManager შუალედურ ფაილს წყაროს გვერდით ქმნის
+            if (isDiskSource && !string.IsNullOrWhiteSpace(_fileStorageData?.FileStoragePath))
+            {
+                File.Delete(Path.Combine(_fileStorageData.FileStoragePath,
+                    entry.WirePath.Replace('/', Path.DirectorySeparatorChar)) + "." + DownloadTempExtension);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(e, "Cannot delete stale download temp for {WirePath} in job {JobId}", entry.WirePath,
+                JobId);
         }
     }
 
@@ -271,11 +497,14 @@ public sealed class CopyJob : IDisposable
         return Path.Combine(_srcDir, entry.WirePath.Replace('/', Path.DirectorySeparatorChar));
     }
 
-    private async Task<long> ServePackages(List<PlannedPackage> plan, CancellationToken cancellationToken)
+    private string GetZipPath(int packageIndex)
     {
-        long bytesTransferred = 0;
+        return Path.Combine(_outDir, "package_" + packageIndex.ToString("D4", CultureInfo.InvariantCulture) + ".zip");
+    }
 
-        for (var packageIndex = 0; packageIndex < plan.Count; packageIndex++)
+    private async Task ServePackages(List<PlannedPackage> plan, CancellationToken cancellationToken)
+    {
+        for (int packageIndex = _state.NextPackageIndex; packageIndex < plan.Count; packageIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -286,35 +515,80 @@ public sealed class CopyJob : IDisposable
             var ackTcs = new TaskCompletionSource<AckResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _current = new PackageCurrent(source, ackTcs);
 
-            await _hubContext.Clients.Client(ConnectionId).SendAsync(UsbCopyHubEvents.ReceivePackageReady,
-                JsonSerializer.Serialize(manifest), cancellationToken);
-
-            AckResult ackResult = await WaitAck(ackTcs, cancellationToken);
+            AckResult ackResult = await OfferAndWaitAck(manifest, ackTcs, cancellationToken);
             _current = null;
 
             if (!ackResult.Ok)
             {
+                //კლიენტის უარი ნიშნავს, რომ პაკეტი ვერასდროს დამუშავდება — ამ სამუშაოს გაგრძელება უაზროა,
+                //მდგომარეობა იშლება, რომ შემდეგი გაშვება სუფთა სამუშაოთი დაიწყოს
+                CleanupWorkDir();
                 throw new UsbCopyJobException(
                     $"Client rejected package {manifest.PackageId}: {ackResult.ErrorMessage ?? "unknown error"}");
             }
 
-            bytesTransferred += source.Length;
+            //ჯერ მდგომარეობა ინახება, მერე იშლება staged ფაილები: წყვეტის შემთხვევაში ზედმეტი ფაილი დარჩება და არა პირიქით
+            _state.BytesTransferred += source.Length;
+            _state.NextPackageIndex = packageIndex + 1;
+            JobStateStore.Save(_workDir, _state);
+
             CleanupAfterAck(plannedPackage, source);
 
             await SendProgress($"Package {packageIndex + 1}/{plan.Count} delivered", cancellationToken);
         }
-
-        return bytesTransferred;
     }
 
-    private async Task<AckResult> WaitAck(TaskCompletionSource<AckResult> ackTcs, CancellationToken cancellationToken)
+    //პაკეტის შეთავაზება და დასტურის მოლოდინი; კავშირის წყვეტისას პაკეტი ჩერდება და ხელახლა მიბმისას თავიდან თავაზდება
+    private async Task<AckResult> OfferAndWaitAck(PackageManifest manifest, TaskCompletionSource<AckResult> ackTcs,
+        CancellationToken cancellationToken)
     {
-        try
+        string manifestJson = JsonSerializer.Serialize(manifest);
+
+        while (true)
         {
-            return await ackTcs.Task.WaitAsync(TimeSpan.FromMinutes(_settings.AckTimeoutMinutes), cancellationToken);
-        }
-        catch (TimeoutException)
-        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string? connectionId;
+            Task attachedTask;
+            Task detachedTask;
+            lock (_connectionLock)
+            {
+                connectionId = _connectionId;
+                attachedTask = _attachedTcs.Task;
+                detachedTask = _detachedTcs.Task;
+            }
+
+            if (connectionId is null)
+            {
+                //კლიენტი გათიშულია — ველოდებით ხელახლა მიბმას; TTL-ის ამოწურვა OperationCanceledException-ს ისვრის
+                await attachedTask.WaitAsync(cancellationToken);
+                continue;
+            }
+
+            //მანიფესტი იგზავნება ყოველ მიბმაზე, რომ reconnect-ის შემდეგ კლიენტმა ის თავიდან მიიღოს
+            await SafeSendToClient(connectionId, UsbCopyHubEvents.ReceivePackageReady, manifestJson, cancellationToken);
+
+            // ReSharper disable once using
+            // ReSharper disable once DisposableConstructor
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Task timeoutTask = Task.Delay(TimeSpan.FromMinutes(_settings.AckTimeoutMinutes), timeoutCts.Token);
+
+            Task completedTask = await Task.WhenAny(ackTcs.Task, detachedTask, timeoutTask);
+
+            if (completedTask == ackTcs.Task)
+            {
+                await timeoutCts.CancelAsync();
+                return await ackTcs.Task;
+            }
+
+            if (completedTask == detachedTask)
+            {
+                //კლიენტი მოლოდინისას გაითიშა — ვბრუნდებით პარკირებაში
+                await timeoutCts.CancelAsync();
+                continue;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             throw new UsbCopyJobException(
                 $"Client did not acknowledge package within {_settings.AckTimeoutMinutes} minutes");
         }
@@ -338,8 +612,7 @@ public sealed class CopyJob : IDisposable
         switch (plannedPackage.PackageType)
         {
             case EPackageType.Archive:
-                string zipPath = Path.Combine(_outDir,
-                    "package_" + packageIndex.ToString("D4", CultureInfo.InvariantCulture) + ".zip");
+                string zipPath = GetZipPath(packageIndex);
                 await CreateZip(plannedPackage.Files, zipPath, cancellationToken);
                 long zipLength = new FileInfo(zipPath).Length;
                 manifest.TransferSize = zipLength;
@@ -480,21 +753,36 @@ public sealed class CopyJob : IDisposable
 
     private Task SendProgress(string message, CancellationToken cancellationToken)
     {
-        return _hubContext.Clients.Client(ConnectionId)
-            .SendAsync(UsbCopyHubEvents.ReceiveProgress, message, cancellationToken);
+        return SafeSendToClient(CurrentConnectionId, UsbCopyHubEvents.ReceiveProgress, message, cancellationToken);
+    }
+
+    //გაგზავნა კლიენტთან: გათიშულ მდგომარეობაში შეტყობინება უბრალოდ იკარგება, გაგზავნის შეცდომა სამუშაოს არ აჩერებს
+    private async Task SafeSendToClient(string? connectionId, string method, string payload,
+        CancellationToken cancellationToken)
+    {
+        if (connectionId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _hubContext.Clients.Client(connectionId).SendAsync(method, payload, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "Cannot send {Method} message for job {JobId}", method, JobId);
+        }
     }
 
     private async Task TrySendFailed(string errorMessage)
     {
-        try
-        {
-            await _hubContext.Clients.Client(ConnectionId)
-                .SendAsync(UsbCopyHubEvents.ReceiveJobFailed, errorMessage, CancellationToken.None);
-        }
-        catch (Exception e)
-        {
-            _logger.LogWarning(e, "Cannot send job failure message for job {JobId}", JobId);
-        }
+        await SafeSendToClient(CurrentConnectionId, UsbCopyHubEvents.ReceiveJobFailed, errorMessage,
+            CancellationToken.None);
     }
 
     private void CleanupWorkDir()

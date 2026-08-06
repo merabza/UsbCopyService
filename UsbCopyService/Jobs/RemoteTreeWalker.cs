@@ -70,6 +70,12 @@ public sealed class RemoteTreeWalker
 
         foreach (MyFileInfo fileInfo in SelectFiles(folderFiles))
         {
+            //FileManager-ის შუალედური (.dwn) ფაილები წყვეტის ნარჩენებია და წყაროს ფაილებად არ ითვლება
+            if (fileInfo.FileName.EndsWith("." + CopyJob.DownloadTempExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             string wirePath = ToWirePath(afterRootPath, fileInfo.FileName);
             if (_existingFiles.Contains(wirePath))
             {

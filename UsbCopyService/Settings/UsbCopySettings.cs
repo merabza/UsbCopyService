@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ParametersManagement.LibFileParameters.Models;
 
@@ -23,7 +24,10 @@ public sealed class UsbCopySettings
     //რამდენ ხანს დაელოდოს სერვისი კლიენტის დასტურს ერთ პაკეტზე
     public int AckTimeoutMinutes { get; set; } = 60;
 
-    //გაშვებისას სამუშაო საქაღალდეში დარჩენილი ძველი job_* ქვესაქაღალდეების წაშლა
+    //რამდენ ხანს ინახება კავშირმოწყვეტილი (detached) სამუშაო აღდგენის მოლოდინში
+    public int DetachedJobTtlMinutes { get; set; } = 1440;
+
+    //გაშვებისას სამუშაო საქაღალდეში დარჩენილი აღუდგენელი (state-ის გარეშე ან ვადაგასული) job_* ქვესაქაღალდეების წაშლა
     public bool CleanWorkPathOnStart { get; set; } = true;
 
     public Dictionary<string, FileStorageData> FileStorages { get; set; } = new();
@@ -35,4 +39,5 @@ public sealed class UsbCopySettings
     public long SmallFileMaxSizeBytes => SmallFileMaxSizeMb * 1024L * 1024L;
     public long ArchiveVolumeMaxSizeBytes => ArchiveVolumeMaxSizeMb * 1024L * 1024L;
     public long PartMaxSizeBytes => PartMaxSizeMb * 1024L * 1024L;
+    public TimeSpan DetachedJobTtl => TimeSpan.FromMinutes(DetachedJobTtlMinutes);
 }
