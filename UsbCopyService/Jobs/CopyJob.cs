@@ -114,7 +114,9 @@ public sealed class CopyJob : IDisposable
     //სინქრონული staging სამუშაოები ჰაბის მეთოდს (და JobManager-ის ლოკს) დააკავებდა — StartJob-ის პასუხი კლიენტს ვერ მიუვიდოდა
     public void Start(Action<CopyJob> onFinished)
     {
-        _ = Task.Run(() => RunAndCleanup(onFinished));
+        //ტოკენი Task.Run-ს განზრახ არ გადაეცემა: გაშვებამდე გაუქმებული ტოკენი RunAndCleanup-ს (და მის finally-ში
+        //onFinished/Dispose-ს) საერთოდ არ გაუშვებდა და სამუშაო რეესტრში ჩარჩებოდა; გაუქმებას RunAsync შიგნით ამუშავებს
+        _ = Task.Run(() => RunAndCleanup(onFinished), CancellationToken.None);
     }
 
     private async Task RunAndCleanup(Action<CopyJob> onFinished)
