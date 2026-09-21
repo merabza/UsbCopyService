@@ -24,8 +24,12 @@ public sealed class UsbCopyHub : Hub
     public Task<string> StartJob(string projectName, string[]? existingFiles)
     {
         string connectionId = Context.ConnectionId;
-        _logger.LogInformation("StartJob {ProjectName} requested by connection {ConnectionId}", projectName,
-            connectionId);
+
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("StartJob {ProjectName} requested by connection {ConnectionId}", projectName,
+                connectionId);
+        }
 
         (string? jobId, string? error) = _jobManager.StartJob(connectionId, projectName, existingFiles ?? []);
 
@@ -41,7 +45,10 @@ public sealed class UsbCopyHub : Hub
     public Task<string> ResumeJob(string jobId)
     {
         string connectionId = Context.ConnectionId;
-        _logger.LogInformation("ResumeJob {JobId} requested by connection {ConnectionId}", jobId, connectionId);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("ResumeJob {JobId} requested by connection {ConnectionId}", jobId, connectionId);
+        }
 
         ResumeJobResult result = _jobManager.ResumeJob(connectionId, jobId);
         return Task.FromResult(JsonSerializer.Serialize(result));

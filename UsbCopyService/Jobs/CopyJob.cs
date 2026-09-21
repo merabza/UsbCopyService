@@ -27,7 +27,7 @@ public sealed class CopyJob : IDisposable
     private const int CopyBufferSize = 81920;
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
-    private readonly object _connectionLock = new();
+    private readonly Lock _connectionLock = new();
     private readonly ExcludeSet? _excludeSet;
     private readonly FileStorageData? _fileStorageData;
     private readonly IHubContext<UsbCopyHub> _hubContext;
@@ -251,13 +251,19 @@ public sealed class CopyJob : IDisposable
             CleanupWorkDir();
             await SafeSendToClient(CurrentConnectionId, UsbCopyHubEvents.ReceiveJobCompleted,
                 JsonSerializer.Serialize(summary), CancellationToken.None);
-            _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", JobId, summary.ElapsedSeconds);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Job {JobId} completed in {Elapsed} seconds", JobId, summary.ElapsedSeconds);
+            }
         }
         catch (OperationCanceledException e)
         {
             //ერთადერთი გაუქმების წყარო detached TTL-ის ამოწურვაა — მიტოვებული სამუშაო იშლება
-            _logger.LogInformation(e, "Job {JobId} abandoned: client did not reconnect within {TtlMinutes} minutes",
-                JobId, _settings.DetachedJobTtlMinutes);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(e, "Job {JobId} abandoned: client did not reconnect within {TtlMinutes} minutes",
+                    JobId, _settings.DetachedJobTtlMinutes);
+            }
             CleanupWorkDir();
             await TrySendFailed("Job was abandoned: client did not reconnect in time");
         }
@@ -338,8 +344,11 @@ public sealed class CopyJob : IDisposable
 
         CleanupCompletedPackages(plan);
 
-        _logger.LogInformation("Job {JobId} restored from disk at package {NextPackageIndex}/{PackagesTotal}", JobId,
-            _state.NextPackageIndex, _state.PackagesTotal);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Job {JobId} restored from disk at package {NextPackageIndex}/{PackagesTotal}", JobId,
+                _state.NextPackageIndex, _state.PackagesTotal);
+        }
         return plan;
     }
 

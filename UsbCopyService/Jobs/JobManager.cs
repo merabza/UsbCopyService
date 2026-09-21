@@ -119,7 +119,10 @@ public sealed class JobManager
             }
 
             _jobsByConnection[connectionId] = job;
-            _logger.LogInformation("Job {JobId} reattached to connection {ConnectionId}", jobId, connectionId);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Job {JobId} reattached to connection {ConnectionId}", jobId, connectionId);
+            }
             return new ResumeJobResult { Status = EResumeJobStatus.Attached };
 
         }
@@ -175,9 +178,12 @@ public sealed class JobManager
         _jobsByConnection[connectionId] = job;
         job.Start(OnJobFinished);
 
-        _logger.LogInformation(
-            "Job {JobId} resumed from disk by connection {ConnectionId} (phase {Phase}, package {NextPackageIndex}/{PackagesTotal})",
-            jobId, connectionId, state.Phase, state.NextPackageIndex, state.PackagesTotal);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Job {JobId} resumed from disk by connection {ConnectionId} (phase {Phase}, package {NextPackageIndex}/{PackagesTotal})",
+                jobId, connectionId, state.Phase, state.NextPackageIndex, state.PackagesTotal);
+        }
         return new ResumeJobResult { Status = EResumeJobStatus.Attached };
     }
 
@@ -230,9 +236,13 @@ public sealed class JobManager
                 return;
             }
 
-            _logger.LogInformation("Connection {ConnectionId} disconnected, detaching job {JobId}", connectionId,
-                job.JobId);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Connection {ConnectionId} disconnected, detaching job {JobId}", connectionId,
+                    job.JobId);
+            }
             job.Detach();
+            job.Dispose();
         }
     }
 
