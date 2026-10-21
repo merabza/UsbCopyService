@@ -4,16 +4,16 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="ParametersManagement.LibFileParameters" Version="1.0.9790.31419" />
+    <PackageVersion Include="ParametersManagement.LibFileParameters" Version="1.0.9790.33556" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
-    <PackageVersion Include="SystemTools.SystemToolsShared" Version="1.0.9790.31339" />
-    <PackageVersion Include="ToolsManagement.FileManagersMain" Version="1.0.9790.31468" />
-    <PackageVersion Include="UsbCopyServiceShared.Contracts" Version="0.0.9790.31450" />
-    <PackageVersion Include="WebSystemTools.ApiExceptionHandler" Version="1.0.9790.31491" />
-    <PackageVersion Include="WebSystemTools.ApiKeyIdentity" Version="1.0.9790.31491" />
-    <PackageVersion Include="WebSystemTools.SerilogLogger" Version="1.0.9790.31491" />
-    <PackageVersion Include="WebSystemTools.SwaggerTools" Version="1.0.9790.31491" />
-    <PackageVersion Include="WebSystemTools.TestToolsApi" Version="1.0.9790.31491" />
-    <PackageVersion Include="WebSystemTools.WindowsServiceTools" Version="1.0.9790.31491" />
+    <PackageVersion Include="SystemTools.SystemToolsShared" Version="1.0.9790.33334" />
+    <PackageVersion Include="ToolsManagement.FileManagersMain" Version="1.0.9790.33653" />
+    <PackageVersion Include="UsbCopyServiceShared.Contracts" Version="0.0.9790.33618" />
+    <PackageVersion Include="WebSystemTools.ApiExceptionHandler" Version="1.0.9790.33710" />
+    <PackageVersion Include="WebSystemTools.ApiKeyIdentity" Version="1.0.9790.33710" />
+    <PackageVersion Include="WebSystemTools.SerilogLogger" Version="1.0.9790.33710" />
+    <PackageVersion Include="WebSystemTools.SwaggerTools" Version="1.0.9790.33710" />
+    <PackageVersion Include="WebSystemTools.TestToolsApi" Version="1.0.9790.33710" />
+    <PackageVersion Include="WebSystemTools.WindowsServiceTools" Version="1.0.9790.33710" />
   </ItemGroup>
 </Project>
