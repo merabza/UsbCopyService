@@ -5,19 +5,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.ApiExceptionHandler\WebSystemTools.ApiExceptionHandler.csproj" />
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.ApiKeyIdentity\WebSystemTools.ApiKeyIdentity.csproj" />
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.SerilogLogger\WebSystemTools.SerilogLogger.csproj" />
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.SwaggerTools\WebSystemTools.SwaggerTools.csproj" />
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.TestToolsApi\WebSystemTools.TestToolsApi.csproj" />
-    <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.WindowsServiceTools\WebSystemTools.WindowsServiceTools.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="ParametersManagement.LibFileParameters" />
     <PackageReference Include="SystemTools.SystemToolsShared" />
     <PackageReference Include="ToolsManagement.FileManagersMain" />
     <PackageReference Include="UsbCopyServiceShared.Contracts" />
+    <PackageReference Include="WebSystemTools.ApiExceptionHandler" />
+    <PackageReference Include="WebSystemTools.ApiKeyIdentity" />
+    <PackageReference Include="WebSystemTools.SerilogLogger" />
+    <PackageReference Include="WebSystemTools.SwaggerTools" />
+    <PackageReference Include="WebSystemTools.TestToolsApi" />
+    <PackageReference Include="WebSystemTools.WindowsServiceTools" />
   </ItemGroup>
 
 </Project>
