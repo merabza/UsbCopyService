@@ -5,16 +5,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\ParametersManagement\ParametersManagement.LibFileParameters\ParametersManagement.LibFileParameters.csproj" />
-    <ProjectReference Include="..\..\SystemTools\SystemTools.SystemToolsShared\SystemTools.SystemToolsShared.csproj" />
-    <ProjectReference Include="..\..\ToolsManagement\ToolsManagement.FileManagersMain\ToolsManagement.FileManagersMain.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.ApiExceptionHandler\WebSystemTools.ApiExceptionHandler.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.ApiKeyIdentity\WebSystemTools.ApiKeyIdentity.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.SerilogLogger\WebSystemTools.SerilogLogger.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.SwaggerTools\WebSystemTools.SwaggerTools.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.TestToolsApi\WebSystemTools.TestToolsApi.csproj" />
     <ProjectReference Include="..\..\WebSystemTools\WebSystemTools.WindowsServiceTools\WebSystemTools.WindowsServiceTools.csproj" />
-    <ProjectReference Include="..\..\UsbCopyServiceShared\UsbCopyServiceShared.Contracts\UsbCopyServiceShared.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ParametersManagement.LibFileParameters" />
+    <PackageReference Include="SystemTools.SystemToolsShared" />
+    <PackageReference Include="ToolsManagement.FileManagersMain" />
+    <PackageReference Include="UsbCopyServiceShared.Contracts" />
   </ItemGroup>
 
 </Project>

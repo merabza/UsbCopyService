@@ -1,9 +1,13 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="ParametersManagement.LibFileParameters" Version="1.0.9790.27216" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
+    <PackageVersion Include="SystemTools.SystemToolsShared" Version="1.0.9790.27014" />
+    <PackageVersion Include="ToolsManagement.FileManagersMain" Version="1.0.9790.26615" />
+    <PackageVersion Include="UsbCopyServiceShared.Contracts" Version="0.0.9790.26525" />
   </ItemGroup>
 </Project>
